@@ -1,0 +1,70 @@
+---
+# ==============================================================================
+# PLAY: Configure Frontend Web Server
+# Purpose: Installs Nginx and deploys the RoboShop UI with Reverse Proxy rules.
+# ==============================================================================
+- name: configure frontend
+  hosts: frontend
+  become: yes
+  tasks:
+    # 1. SETUP NGINX VERSION
+    # Manual: "dnf module disable nginx -y" and "enable nginx:1.24"
+    - name: enable nginx 1.24
+      ansible.builtin.command: dnf module enable nginx:1.24 -y
+
+    # Manual: "dnf install nginx -y"
+    - name: install nginx
+      ansible.builtin.dnf:
+        name: nginx
+        state: present
+
+    # 2. CONFIGURE REVERSE PROXY
+    # Instead of editing the risky 'nginx.conf', we place our rules in the include folder.
+    - name: copy roboshop config
+      ansible.builtin.template:
+        src:  nginx.conf
+        dest: /etc/nginx/default.d/nginx.conf
+      notify: restart nginx   # If this file changes, restart Nginx automatically
+
+    # 3. DEPLOY STATIC CONTENT
+    # Manual: "rm -rf /usr/share/nginx/html/*"
+    # We use 'state: absent' to delete the directory cleanly.
+    - name: clean old content
+      ansible.builtin.file:
+        path: /usr/share/nginx/html
+        state: absent
+
+    # Recreate the directory empty
+    - name: create html directory
+      ansible.builtin.file:
+        path: /usr/share/nginx/html
+        state: directory
+
+    # Manual: "curl -o /tmp/frontend.zip ..."
+    - name: download frontend content
+      ansible.builtin.get_url:
+        url: https://roboshop-artifacts.s3.amazonaws.com/frontend-v3.zip
+        dest: /tmp/frontend.zip
+
+    # Manual: "unzip /tmp/frontend.zip"
+    - name: extract frontend content
+      ansible.builtin.unarchive:
+        src: /tmp/frontend.zip
+        dest: /usr/share/nginx/html
+        remote_src: yes
+
+    # 4. START SERVICE
+    # Manual: "systemctl enable nginx" and "systemctl restart nginx"
+    - name: start nginx
+      ansible.builtin.service:
+        name: nginx
+        state: started
+        enabled: yes
+
+  # 5. HANDLERS
+  # This only runs if the config file was actually changed
+  handlers:
+    - name: restart nginx
+      ansible.builtin.service:
+        name: nginx
+        state: restarted

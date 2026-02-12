@@ -1,0 +1,99 @@
+---
+# ==============================================================================
+# PLAY: Configure User Microservice
+# Purpose: Manages user profiles (MongoDB) and sessions (Redis).
+# ==============================================================================
+- name: configure user
+  hosts: user             # Targets the [user] group
+  become: yes
+  tasks:
+    # --- APP SETUP ---
+    - name: enable nodejs 20
+      ansible.builtin.command: dnf module enable nodejs:20 -y
+
+    - name: install nodejs
+      ansible.builtin.dnf:
+        name: nodejs
+        state: present
+
+    - name: create system user roboshop
+      ansible.builtin.user:
+        name: roboshop
+        system: true
+        home: /app
+        shell: /sbin/nologin
+        comment: "Roboshop system user"
+
+    # Clean Deployment Strategy
+    - name: delete app directory
+      ansible.builtin.file:
+        path: /app
+        state: absent
+
+    - name: create app directory
+      ansible.builtin.file:
+        path: /app
+        state: directory
+
+    - name: delete user zip file
+      ansible.builtin.file:
+        path: /tmp/user.zip
+        state: absent
+
+    - name: download user
+      ansible.builtin.get_url:
+        url: https://roboshop-artifacts.s3.amazonaws.com/user-v3.zip 
+        dest: /tmp/user.zip
+
+    - name: unarchieve user
+      ansible.builtin.unarchive:
+        src: /tmp/user.zip
+        dest: /app
+        remote_src: yes
+
+    - name: install dependencies
+      community.general.npm:
+        path: /app
+
+    # --- SERVICE CONFIGURATION ---
+    # We use 'template' to pass Redis and Mongo hostnames dynamically
+    - name: copy user service
+      ansible.builtin.template:
+        src: user.service
+        dest: /etc/systemd/system/user.service
+
+    - name: daemon reload
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    # --- SCHEMA LOADING (Added this part) ---
+    - name: copy mongo repo
+      ansible.builtin.copy:
+        src: mongo.repo
+        dest: /etc/yum.repos.d/mongo.repo
+
+    - name: install mongodb client
+      ansible.builtin.dnf:
+        name: mongodb-mongosh
+        state: present
+
+    # Check if 'users' database exists
+    - name: check users loaded
+      ansible.builtin.command: mongosh --host "{{ MONGODB_HOST }}" --quiet --eval 'db.getMongo().getDBNames().indexOf("users")'
+      register: user_output
+
+    - name: print the output
+      ansible.builtin.debug:
+        msg: "{{ user_output }}"
+
+    # Load data only if missing (Result is -1)
+    - name: load the users
+      ansible.builtin.shell: mongosh --host "{{ MONGODB_HOST }}" </app/db/master-data.js
+      when: user_output.stdout | int < 0
+
+    # --- START SERVICE ---
+    - name: start user
+      ansible.builtin.service:
+        name: user
+        state: restarted
+        enabled: yes

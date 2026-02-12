@@ -1,0 +1,43 @@
+---
+# ==============================================================================
+# PLAY: Configure Redis Server
+# Purpose: Sets up the in-memory cache used by the Cart microservice.
+# ==============================================================================
+- name: configure redis server
+  hosts: redis
+  become: yes
+  tasks:
+    # 1. INSTALLATION
+    # Enable the Redis 7 stream before installing
+    - name: enable redis 7
+      ansible.builtin.command: dnf module enable redis:7 -y
+
+    - name: install redis
+      ansible.builtin.dnf:
+        name: redis 
+        state: present
+
+    # 2. NETWORK CONFIGURATION
+    # Allow Redis to listen on all interfaces, not just localhost
+    - name: allow remote connections
+      ansible.builtin.replace:
+        path: /etc/redis/redis.conf
+        regexp: '127.0.0.1'
+        replace: '0.0.0.0'
+
+    # 3. SECURITY CONFIGURATION
+    # Disable Protected Mode. 
+    # REQUIRED because we are binding to 0.0.0.0 without a password.
+    # Without this, Redis will block external connections from the Cart server.
+    - name: disable protected mode
+      ansible.builtin.lineinfile:
+        path: /etc/redis/redis.conf
+        regexp: '^protected-mode' # Matches lines starting with "protected-mode"
+        line: 'protected-mode no' # Replaces the whole line
+
+    # 4. START SERVICE
+    - name: start and enable redis
+      ansible.builtin.service: 
+        name: redis
+        state: restarted
+        enabled: yes
