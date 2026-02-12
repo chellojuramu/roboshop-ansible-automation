@@ -1,0 +1,41 @@
+---
+# ==============================================================================
+# PLAY: Configure RabbitMQ Message Broker
+# Purpose: Handles asynchronous messaging between microservices (e.g., Payment).
+# ==============================================================================
+- name: configure rabbitmq server
+  hosts: rabbitmq
+  become: yes
+  tasks:
+    # 1. REPOSITORY SETUP
+    # RabbitMQ requires specific repos for Erlang and the server itself.
+    - name: copy rabbitmq repo
+      ansible.builtin.copy:
+        src: rabbitmq.repo
+        dest: /etc/yum.repos.d/rabbitmq.repo
+
+    # 2. INSTALLATION
+    - name: install rabbitmq server
+      ansible.builtin.dnf:
+        name: rabbitmq-server
+        state: present
+
+    # 3. SERVICE MANAGEMENT
+    - name: start and enable rabbitmq
+      ansible.builtin.service:
+        state: restarted
+        enabled: yes
+        name: rabbitmq-server
+
+    # 4. APPLICATION USER SETUP
+    # This creates the user that the Payment service will use to connect.
+    - name: create rabbitmq user
+      community.rabbitmq.rabbitmq_user:
+        user: roboshop 
+        password: roboshop123
+        permissions:
+          - vhost: /
+            configure_priv: .*
+            read_priv: .*
+            write_priv: .*
+        state: present
