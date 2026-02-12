@@ -1,7 +1,7 @@
 ---
 # ==============================================================================
 # PLAY: Configure User Microservice
-# Purpose: Manages user profiles (MongoDB) and sessions (Redis).
+# Purpose: Manages user profiles.
 # ==============================================================================
 - name: configure user
   hosts: user             # Targets the [user] group
@@ -59,39 +59,13 @@
     # We use 'template' to pass Redis and Mongo hostnames dynamically
     - name: copy user service
       ansible.builtin.template:
-        src: user.service
+        src: user.service.j2
         dest: /etc/systemd/system/user.service
 
     - name: daemon reload
       ansible.builtin.systemd_service:
         daemon_reload: true
 
-    # --- SCHEMA LOADING (Added this part) ---
-    - name: copy mongo repo
-      ansible.builtin.copy:
-        src: mongo.repo
-        dest: /etc/yum.repos.d/mongo.repo
-
-    - name: install mongodb client
-      ansible.builtin.dnf:
-        name: mongodb-mongosh
-        state: present
-
-    # Check if 'users' database exists
-    - name: check users loaded
-      ansible.builtin.command: mongosh --host "{{ MONGODB_HOST }}" --quiet --eval 'db.getMongo().getDBNames().indexOf("users")'
-      register: user_output
-
-    - name: print the output
-      ansible.builtin.debug:
-        msg: "{{ user_output }}"
-
-    # Load data only if missing (Result is -1)
-    - name: load the users
-      ansible.builtin.shell: mongosh --host "{{ MONGODB_HOST }}" </app/db/master-data.js
-      when: user_output.stdout | int < 0
-
-    # --- START SERVICE ---
     - name: start user
       ansible.builtin.service:
         name: user
