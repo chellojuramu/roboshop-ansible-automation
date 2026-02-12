@@ -1,47 +1,104 @@
 ---
 # ==============================================================================
-# PLAY: Configure Catalogue Application (Node.js)
-# Purpose: Prepares the environment and downloads the application code.
+# PLAY: Configure Catalogue Microservice
+# Purpose: Deploys Node.js app and loads initial data into MongoDB.
 # ==============================================================================
 - name: configure catalogue
-  hosts: catalogue        # Targets the [catalogue] group in inventory.ini
-  become: yes             # Requires root to install Node.js and create users
-
+  hosts: catalogue        # Targets the [catalogue] group
+  become: yes             # Root access required
+  
   tasks:
-    # 1. Enable the specific stream for Node.js 20 in the package manager
+    # --- APP SETUP START ---
     - name: enable nodejs 20
       ansible.builtin.command: dnf module enable nodejs:20 -y
 
-    # 2. Install the Node.js runtime environment
     - name: install nodejs
       ansible.builtin.dnf:
         name: nodejs
         state: present
 
-    # 3. Security Best Practice: Create a restricted user to run the app
     - name: create system user roboshop
       ansible.builtin.user:
         name: roboshop
-        system: true              # Makes it a system-level account
-        home: /app                # Sets the home directory
-        shell: /sbin/nologin      # Prevents interactive terminal access for security
+        system: true
+        home: /app
+        shell: /sbin/nologin
         comment: "Roboshop system user"
 
-    # 4. Create the main directory where the application code will live
+    # Clean Deployment Strategy
+    - name: delete app directory
+      ansible.builtin.file:
+        path: /app
+        state: absent
+
     - name: create app directory
       ansible.builtin.file:
         path: /app
         state: directory
 
-    # 5. Download the zipped application code from AWS S3
+    - name: delete catalogue zip file
+      ansible.builtin.file:
+        path: /tmp/catalogue.zip
+        state: absent
+
     - name: download catalogue
       ansible.builtin.get_url:
         url: https://roboshop-artifacts.s3.amazonaws.com/catalogue-v3.zip 
-        dest: /tmp/catalogue.zip  # Store it temporarily in /tmp
+        dest: /tmp/catalogue.zip
 
-    # 6. Extract the downloaded code into the application directory
     - name: unarchieve catalogue
       ansible.builtin.unarchive:
         src: /tmp/catalogue.zip
         dest: /app
-        remote_src: yes           # Tells Ansible the zip is already on the remote server
+        remote_src: yes
+
+    - name: install dependencies
+      community.general.npm:
+        path: /app
+
+    # --- SERVICE CONFIGURATION ---
+    # CRITICAL CHANGE: Used 'template' so we can pass variables into the file
+    - name: copy catalogue service
+      ansible.builtin.template:
+        src: catalogue.service
+        dest: /etc/systemd/system/catalogue.service
+
+    - name: daemon reload
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    # --- SCHEMA LOADING START ---
+    # We need the repo file to know where to download the mongo client
+    - name: copy mongo repo
+      ansible.builtin.copy:
+        src: mongo.repo
+        dest: /etc/yum.repos.d/mongo.repo
+
+    # Install ONLY the client tool (mongosh) to talk to the DB server
+    - name: install mongodb client
+      ansible.builtin.dnf:
+        name: mongodb-mongosh
+        state: present
+
+    # Check if data exists. Returns -1 if 'catalogue' DB is missing.
+    - name: check products loaded
+      ansible.builtin.command: mongosh --host "{{ MONGODB_HOST }}" --quiet --eval 'db.getMongo().getDBNames().indexOf("catalogue")'
+      register: catalogue_output
+
+    # Print output for debugging (optional)
+    - name: print the output
+      ansible.builtin.debug:
+        msg: "{{ catalogue_output }}"
+
+    # Only load data if the check returned -1 (DB missing)
+    # Uses 'shell' because of the '<' redirection operator
+    - name: load the products
+      ansible.builtin.shell: mongosh --host "{{ MONGODB_HOST }}" </app/db/master-data.js
+      when: catalogue_output.stdout | int < 0
+
+    # --- APP START ---
+    - name: start catalogue
+      ansible.builtin.service:
+        name: catalogue
+        state: restarted
+        enabled: yes

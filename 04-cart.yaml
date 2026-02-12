@@ -1,0 +1,89 @@
+---
+# ==============================================================================
+# PLAY: Configure Cart Microservice (Node.js)
+# Purpose: Deploys the Shopping Cart application logic.
+# Pattern: This follows the exact same standard as the Catalogue service.
+# ==============================================================================
+- name: configure cart
+  hosts: cart             # Targets the [cart] group in inventory.ini
+  become: yes             # Root access required for packages and system configurations
+
+  tasks:
+    # 1. SETUP NODEJS ENVIRONMENT
+    # Enables the specific version (v20) required by the developers
+    - name: enable nodejs 20
+      ansible.builtin.command: dnf module enable nodejs:20 -y
+
+    - name: install nodejs
+      ansible.builtin.dnf:
+        name: nodejs
+        state: present
+
+    # 2. SECURITY CONFIGURATION
+    # Create the restricted system user 'roboshop'
+    - name: create system user roboshop
+      ansible.builtin.user:
+        name: roboshop
+        system: true
+        home: /app
+        shell: /sbin/nologin
+        comment: "Roboshop system user"
+   
+    # 3. CLEAN DEPLOYMENT STRATEGY
+    # Delete the old code directory to ensure we don't have stale files
+    - name: delete app directory
+      ansible.builtin.file:
+        path: /app
+        state: absent
+
+    # Recreate the directory fresh and empty
+    - name: create app directory
+      ansible.builtin.file:
+        path: /app
+        state: directory
+
+    # 4. DOWNLOAD ARTIFACTS
+    # Cleanup old zip file to ensure we don't unzip a cached version
+    - name: delete cart zip file
+      ansible.builtin.file:
+        path: /tmp/cart.zip
+        state: absent
+
+    # Fetch the latest code from the artifact repository (S3)
+    - name: download cart
+      ansible.builtin.get_url:
+        url: https://roboshop-artifacts.s3.amazonaws.com/cart-v3.zip 
+        dest: /tmp/cart.zip
+
+    # Unzip the code into the /app directory
+    - name: unarchieve cart
+      ansible.builtin.unarchive:
+        src: /tmp/cart.zip
+        dest: /app
+        remote_src: yes      # The zip file is already on the server (in /tmp)
+
+    # 5. INSTALL DEPENDENCIES
+    # This runs 'npm install' inside /app to download libraries defined in package.json
+    - name: install dependencies
+      community.general.npm:
+        path: /app
+
+    # 6. SERVICE CONFIGURATION
+    # Copy the systemd service file. Uses 'template' to allow for variable substitution.
+    - name: copy cart service
+      ansible.builtin.template:
+        src: cart.service                        # Local file on your laptop
+        dest: /etc/systemd/system/cart.service   # Remote location
+
+    # 7. START APPLICATION
+    # Tell systemd to read the new service file we just copied
+    - name: daemon reload
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    # Start the app and ensure it runs on boot
+    - name: start cart
+      ansible.builtin.service:
+        name: cart
+        state: restarted     # Restart ensures the latest code changes take effect
+        enabled: yes
