@@ -55,7 +55,7 @@
     - name: install dependencies
       ansible.builtin.pip:
         requirements: /app/requirements.txt
-        executable: pip3    # Forces usage of pip3
+        executable: pip3.9    # Forces usage of pip3
       # Note: We don't need 'chdir' if we provide the full path to requirements.txt
 
     # 6. SERVICE SETUP
