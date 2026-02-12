@@ -59,7 +59,7 @@
     # We use 'template' to pass Redis and Mongo hostnames dynamically
     - name: copy user service
       ansible.builtin.template:
-        src: user.service.j2
+        src: user.service
         dest: /etc/systemd/system/user.service
 
     - name: daemon reload
