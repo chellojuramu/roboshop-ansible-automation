@@ -1,0 +1,99 @@
+---
+# ==============================================================================
+# PLAY: Configure Shipping Microservice (Java)
+# Purpose: Handles shipping logic. Connects to MySQL.
+# ==============================================================================
+- name: configure shipping server
+  hosts: shipping
+  become: yes
+  tasks:
+    # 1. INSTALL JAVA ENVIRONMENT
+    - name: install maven and mysql client
+      ansible.builtin.dnf:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - maven
+        - mysql
+
+    # 2. USER SETUP
+    - name: create system user roboshop
+      ansible.builtin.user:
+        name: roboshop
+        system: true
+        home: /app
+        shell: /sbin/nologin
+        comment: "Roboshop system user"
+
+    # 3. CLEAN DEPLOYMENT
+    - name: delete app directory
+      ansible.builtin.file:
+        path: /app
+        state: absent
+
+    - name: create app directory
+      ansible.builtin.file:
+        path: /app
+        state: directory
+
+    # 4. DOWNLOAD AND BUILD
+    - name: download shipping code
+      ansible.builtin.get_url:
+        url: https://roboshop-artifacts.s3.amazonaws.com/shipping-v3.zip 
+        dest: /tmp/shipping.zip
+
+    - name: unarchive shipping
+      ansible.builtin.unarchive:
+        src: /tmp/shipping.zip
+        dest: /app
+        remote_src: yes
+
+    # Compile the Java code into a JAR file
+    - name: build application with maven
+      ansible.builtin.command: mvn clean package
+      args:
+        chdir: /app
+
+    - name: rename artifact for service
+      ansible.builtin.command: mv target/shipping-1.0.jar shipping.jar 
+      args:
+        chdir: /app
+
+    # 5. SERVICE SETUP
+    - name: copy shipping service
+      ansible.builtin.template:
+        src: shipping.service
+        dest: /etc/systemd/system/shipping.service
+
+    - name: daemon reload
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    # 6. DATABASE SCHEMA LOADING (MySQL)
+    # These libraries are required for Ansible to talk to MySQL
+    - name: install mysql python dependencies
+      ansible.builtin.pip:
+        name: 
+          - cryptography
+          - PyMySQL
+        executable: pip3
+
+    - name: import shipping data
+      community.mysql.mysql_db:
+        state: import
+        name: all
+        login_host: "{{ MYSQL_HOST }}"
+        login_user: root
+        login_password: RoboShop@1
+        target: "{{ item }}"
+      loop:
+        - /app/db/schema.sql
+        - /app/db/app-user.sql 
+        - /app/db/master-data.sql
+
+    # 7. START SERVICE
+    - name: start and enable shipping
+      ansible.builtin.service:
+        name: shipping
+        state: restarted
+        enabled: yes
