@@ -1,0 +1,75 @@
+---
+# ==============================================================================
+# PLAY: Configure Payment Microservice (Python)
+# Purpose: Handles payments. Connects to RabbitMQ, Cart, and User.
+# ==============================================================================
+- name: configure payment server
+  hosts: payment
+  become: yes
+  tasks:
+    # 1. INSTALL PYTHON ENVIRONMENT
+    # We need GCC and Devel packages to compile Python libraries
+    - name: install python packages
+      ansible.builtin.dnf:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - python3
+        - gcc
+        - python3-devel
+
+    # 2. USER SETUP
+    - name: create system user roboshop
+      ansible.builtin.user:
+        name: roboshop
+        system: true
+        home: /app
+        shell: /sbin/nologin
+        comment: "Roboshop system user"
+
+    # 3. CLEAN DEPLOYMENT
+    - name: delete app directory
+      ansible.builtin.file:
+        path: /app
+        state: absent
+
+    - name: create app directory
+      ansible.builtin.file:
+        path: /app
+        state: directory
+
+    # 4. DOWNLOAD CODE
+    - name: download payment code
+      ansible.builtin.get_url:
+        url: https://roboshop-artifacts.s3.amazonaws.com/payment-v3.zip
+        dest: /tmp/payment.zip
+
+    - name: unarchive payment
+      ansible.builtin.unarchive:
+        src: /tmp/payment.zip
+        dest: /app
+        remote_src: yes
+
+    # 5. INSTALL DEPENDENCIES (PIP)
+    # This reads 'requirements.txt' and installs the libraries
+    - name: install dependencies
+      ansible.builtin.pip:
+        requirements: /app/requirements.txt
+        executable: pip3    # Forces usage of pip3
+      # Note: We don't need 'chdir' if we provide the full path to requirements.txt
+
+    # 6. SERVICE SETUP
+    - name: copy payment service
+      ansible.builtin.template:
+        src: payment.service
+        dest: /etc/systemd/system/payment.service
+
+    - name: daemon reload
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: start payment
+      ansible.builtin.service:
+        name: payment
+        state: restarted
+        enabled: yes
