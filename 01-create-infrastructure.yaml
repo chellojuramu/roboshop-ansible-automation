@@ -4,104 +4,107 @@
 # Purpose: Automates the AWS infrastructure setup for the RoboShop project.
 # ==============================================================================
 - name: create ec2 and r53 records
-  hosts: all               # Targets all hosts in the inventory (though we run it locally)
-  connection: local        # Runs the AWS API commands directly from your control node, no SSH needed
-  
-  # ----------------------------------------------------------------------------
-  # VARIABLES: The configuration data for our AWS resources.
-  # ----------------------------------------------------------------------------
+  hosts: localhost
+  connection: local
+
   vars:
-    sg_id: sg-0736a66e08690c4f1        # The Security Group ID allowing SSH/HTTP traffic
-    ami_id: ami-0220d79f3f480ecf5       # The Amazon Machine Image ID (e.g., CentOS/RHEL)
-    domain_name: servicewiz.in         # Your registered Route53 domain name
-    env: dev                            # The environment name (dev, qa, prod)
+    sg_id: "sg-0736a66e08690c4f1"
+    ami_id: "ami-0220d79f3f480ecf5"
+    domain_name: "servicewiz.in"
+    env: "dev"
     
-    # THE TOGGLE SWITCH: Change this to "destroy" to delete everything
-    action: create                      
+    # THE TOGGLE SWITCH: Change to "destroy" to delete everything
+    action: create
     
-    # THE LOOP LIST: The names of the microservices we want to build/destroy
+    # THE FULL LIST: All 10 microservices to be created
     instances:
       - mongodb
       - catalogue
+      - redis
+      - user
+      - cart
+      - mysql
+      - shipping
+      - rabbitmq
+      - payment
+      - frontend
 
   tasks:
     # ==========================================================================
     # PHASE 1: CREATE INFRASTRUCTURE (Runs only if action == "create")
     # ==========================================================================
     
-    # 1. Loop through the 'instances' list and launch an EC2 server for each one
+    # 1. Launch EC2 servers for every item in the 'instances' list
     - name: create ec2 instance
       amazon.aws.ec2_instance:
-        instance_type: "t3.micro"       # The size of the server (Free Tier)
-        security_group: "{{ sg_id }}"   # Attach our security group
-        image_id: "{{ ami_id }}"        # Use our specific OS image
-        name: "{{ item }}-{{ env }}"    # e.g., "mongodb-dev" or "catalogue-dev"
+        instance_type: "t3.micro"
+        security_group: "{{ sg_id }}"
+        image_id: "{{ ami_id }}"
+        name: "{{ item }}-{{ env }}"
         tags:
-          Project: roboshop             # Tags are crucial for AWS billing/organization
-          Component: "{{ item }}"       
+          Project: roboshop
+          Component: "{{ item }}"
           Environment: "{{ env }}"
           Name: "{{ item }}-{{ env }}"
-      loop: "{{ instances }}"           # Start the loop using our list of microservices
-      register: ec2_output              # Captures the massive JSON response from AWS into this variable
-      when: action == "create"          # ONLY run this task if the toggle switch is "create"
+      loop: "{{ instances }}"
+      register: ec2_output
+      when: action == "create"
 
-    # 2. Print the AWS response to the screen so we can see the new IP addresses
+    # 2. Print the AWS response (for debugging)
     - name: print the output
       ansible.builtin.debug:
         msg: "{{ ec2_output }}"
       when: action == "create"
 
-    # 3. Create Private DNS records so the microservices can talk to each other securely
-    - name: create r53 records
-      amazon.aws.route53:
-        state: present                  # Ensure the DNS record exists
-        zone: "{{ domain_name }}"       # E.g., daws88s.online
-        record: "{{ item.item }}-{{ env }}.{{ domain_name }}" 
-        type: A                         # Standard IPv4 address record
-        ttl: 1                          # Time-To-Live (1 second for instant updates)
-        # Dig into the 'ec2_output' variable to find the automatically assigned Private IP
-        value: "{{ item.instances[0].private_ip_address }}" 
-        wait: true                      # Wait for AWS to confirm the record is created
-      loop: "{{ ec2_output.results }}"  # Loop through the results we saved from the EC2 creation task
-      when: action == "create"
-
-    # 4. Create a Public DNS record (Only for the Frontend web server)
-    - name: create r53 records
+    # 3. Create Private DNS records (Internal communication)
+    - name: create r53 records (private)
       amazon.aws.route53:
         state: present
         zone: "{{ domain_name }}"
-        record: "roboshop-{{ env }}.{{ domain_name }}" 
+        record: "{{ item.item }}-{{ env }}.{{ domain_name }}"
         type: A
         ttl: 1
-        # Dig into the 'ec2_output' variable to find the Public IP
+        value: "{{ item.instances[0].private_ip_address }}"
+        wait: true
+        overwrite: true   # Critical Fix: Updates record if it already exists
+      loop: "{{ ec2_output.results }}"
+      when: action == "create"
+
+    # 4. Create Public DNS record (ONLY for Frontend to be accessible from internet)
+    - name: create r53 records (public)
+      amazon.aws.route53:
+        state: present
+        zone: "{{ domain_name }}"
+        record: "{{ item.item }}-{{ env }}.{{ domain_name }}"
+        type: A
+        ttl: 1
         value: "{{ item.instances[0].public_ip_address }}"
         wait: true
+        overwrite: true   # Critical Fix: Updates record if it already exists
       loop: "{{ ec2_output.results }}"
-      # ONLY run this if BOTH conditions are true:
-      when:  
-        - item.item == "frontend"       # The server currently looping is the frontend
-        - action == "create"            # AND the toggle switch is set to "create"
-
+      when: 
+        - item.item == "frontend"
+        - action == "create"
 
     # ==========================================================================
     # PHASE 2: DESTROY INFRASTRUCTURE (Runs only if action == "destroy")
     # ==========================================================================
 
-    # 5. Delete all the DNS records we created
+    # 5. Delete DNS records
     - name: delete r53 records
       amazon.aws.route53:
-        state: absent                   # "absent" tells Ansible to delete the resource
+        state: absent
         zone: "{{ domain_name }}"
         record: "{{ item }}-{{ env }}.{{ domain_name }}"
         type: A
         ttl: 1
-      loop: "{{ instances }}"           # Loop through our simple list of microservices
-      when: action == "destroy"         # ONLY run if the toggle switch is "destroy"
+      loop: "{{ instances }}"
+      when: action == "destroy"
 
-    # 6. Terminate the EC2 servers
+    # 6. Terminate EC2 servers
     - name: delete ec2 instance
       amazon.aws.ec2_instance:
-        state: absent                   # Terminate the server
-        name: "{{ item }}-{{ env }}"    # Find the server by its name tag (e.g., "mongodb-dev")
+        state: absent
+        name: "{{ item }}-{{ env }}"
       loop: "{{ instances }}"
       when: action == "destroy"
